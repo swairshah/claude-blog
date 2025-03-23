@@ -1,3 +1,8 @@
+---
+title: Talking to My Terminal: Building a Voice-Driven REPL Assistant with Whisper, GPT, and a Lot of asyncio
+date: March 23, 2025
+---
+
 # Talking to My Terminal: Building a Voice-Driven REPL Assistant with Whisper, GPT, and a Lot of `asyncio`
 
 For a while, I'd been thinking: what if my terminal could listen to me? Not in a metaphorical sense like Bash waiting for `rm -rf /`, but literally. Speak a question, get a response. Like a command-line Claude. I wasn't aiming for sentience, just a helpful assistant that could handle both voice and keyboard input. Naturally, this led to a weekend project that spiraled into something more involved and more fun than I expected.
