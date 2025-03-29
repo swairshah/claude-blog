@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Talking to My Terminal: Building a Voice-Driven REPL Assistant with Whisper, GPT, and a Lot of asyncio - My Blog</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+    <header>
+        <h1>Talking to My Terminal: Building a Voice-Driven REPL Assistant with Whisper, GPT, and a Lot of asyncio</h1>
+        <nav>
+            <ul>
+                <li><a href="../index.html">Home</a></li>
+                <li><a href="../about.html">About</a></li>
+                <li><a href="../blog.html">Blog Posts</a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        <article>
+            <p class="date">March 23, 2025</p>
+            <h1 id="talking-to-my-terminal-building-a-voice-driven-repl-assistant-with-whisper-gpt-and-a-lot-of-asyncio">Talking to My Terminal: Building a Voice-Driven REPL Assistant with Whisper, GPT, and a Lot of <code>asyncio</code></h1>
+<p>For a while, I&#39;d been thinking: what if my terminal could listen to me? Not in a metaphorical sense like Bash waiting for <code>rm -rf /</code>, but literally. Speak a question, get a response. Like a command-line Claude. I wasn&#39;t aiming for sentience, just a helpful assistant that could handle both voice and keyboard input. Naturally, this led to a weekend project that spiraled into something more involved and more fun than I expected.</p>
+<p>This is a walkthrough of how I built a voice + text REPL in Python using OpenAI&#39;s Whisper and GPT APIs, Silero&#39;s Voice Activity Detection, <code>asyncio</code>, and a terminal UI powered by <code>rich</code>. It includes the bugs I encountered, the incremental fixes, and the final version that now runs happily in my terminal.</p>
+<hr>
+<h2 id="phase-1-basic-audio-recording">Phase 1: Basic Audio Recording</h2>
+<p>I began by recording audio using <code>sounddevice</code>. Here&#39;s the first attempt:</p>
+<pre><code class="language-python">import sounddevice as sd
+import wavio
+
+def record():
+    audio = sd.rec(int(5 * 44100), samplerate=44100, channels=1, dtype=&#39;int16&#39;)
+    sd.wait()
+    wavio.write(&quot;temp.wav&quot;, audio, 44100, sampwidth=2)
+</code></pre>
+<p>This worked. I could record 5 seconds of audio and save it to disk. But it blocked the main thread completely, which made it unsuitable for a REPL. So I brought in <code>asyncio</code>.</p>
+<hr>
+<h2 id="phase-2-asynchronous-recording-and-transcription">Phase 2: Asynchronous Recording and Transcription</h2>
+<p>I rewrote the recorder to run inside an async coroutine, using <code>loop.run_in_executor()</code> to run the blocking audio capture code:</p>
+<pre><code class="language-python">async def audio_stream():
+    loop = asyncio.get_event_loop()
+    while True:
+        audio = await loop.run_in_executor(None, sd.rec, ...)
+        await loop.run_in_executor(None, sd.wait)
+        # save and queue
+</code></pre>
+<p>I also set up an <code>asyncio.Queue</code> to coordinate the recording and transcription tasks. Using a regular <code>queue.Queue</code> here would&#39;ve led to blocking issues, so the switch to <code>asyncio.Queue</code> was essential:</p>
+<pre><code class="language-python">audio_queue = asyncio.Queue()
+await audio_queue.put(temp_file)
+audio_file = await audio_queue.get()
+</code></pre>
+<p>This structure allowed me to run multiple coroutines in parallel: one to record audio, one to transcribe it with Whisper, and one to process keyboard input via <code>aioconsole.ainput()</code>.</p>
+<hr>
+<h2 id="phase-3-filtering-silence-with-silero-vad">Phase 3: Filtering Silence with Silero VAD</h2>
+<p>Initially, I sent every 5-second audio clip to Whisper, which meant a lot of empty transcriptions like &quot;...&quot; or silence. To avoid this, I used Silero&#39;s VAD (Voice Activity Detection), a compact and fast PyTorch model for detecting speech.</p>
+<p>To use it properly, I had to reshape the audio into 512-sample chunks, as required by the model:</p>
+<pre><code class="language-python">def is_voice_present(audio_np):
+    audio_tensor = torch.from_numpy(audio_np).float()
+    chunks = audio_tensor[:num_frames * 512].reshape(num_frames, 512)
+    with torch.no_grad():
+        probs = vad_model(chunks, sample_rate)
+    return (probs &gt; 0.9).any().item()
+</code></pre>
+<p>This, combined with a simple RMS energy check, filtered out low-volume noise and made the system much more responsive to actual speech.</p>
+<hr>
+<h2 id="phase-4-handling-long-llm-outputs">Phase 4: Handling Long LLM Outputs</h2>
+<p>Once I hooked up GPT-4 (via OpenAI&#39;s <code>chat.completions.create</code>), I ran into a new issue. Long outputs would occasionally crash the program with this error:</p>
+<pre><code>BlockingIOError: [Errno 35] write could not complete without blocking
+</code></pre>
+<p>This happens on macOS when you <code>print()</code> large amounts of data inside an async context. The terminal output buffer gets overwhelmed.</p>
+<p>My initial fix was to chunk the response and use <code>sys.stdout.write()</code> in a background thread. But this was clunky and still prone to timing issues.</p>
+<p>The real solution was to switch to <strong>streaming</strong> responses from the API. Instead of waiting for the full output, I printed tokens as they arrived:</p>
+<pre><code class="language-python">async for chunk in stream:
+    delta = chunk.choices[0].delta.content
+    if delta:
+        response_text += delta
+        await asyncio.to_thread(console.print, delta, end=&quot;&quot;)
+</code></pre>
+<p>This not only solved the crash but made the assistant feel significantly more responsive.</p>
+<hr>
+<h2 id="phase-5-graceful-shutdown">Phase 5: Graceful Shutdown</h2>
+<p>Pressing Ctrl+C caused a cascade of <code>CancelledError</code> exceptions, especially in coroutines waiting on <code>await audio_queue.get()</code> or <code>await aioconsole.ainput()</code>. To fix this, I caught <code>CancelledError</code> explicitly and added a shutdown handler:</p>
+<pre><code class="language-python">async def shutdown(loop, signal=None):
+    print(&quot;\nShutting down...&quot;)
+    tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    [task.cancel() for task in tasks]
+    await asyncio.gather(*tasks, return_exceptions=True)
+    loop.stop()
+</code></pre>
+<p>I also wrapped long-running loops in <code>try: except asyncio.CancelledError</code> so they could exit cleanly.</p>
+<hr>
+<h2 id="phase-6-using-rich-for-output">Phase 6: Using <code>rich</code> for Output</h2>
+<p>Finally, to make the REPL friendlier, I switched to using the <code>rich</code> library for styled and safe terminal output. No more <code>print()</code> or <code>sys.stdout.write()</code> hacks — just:</p>
+<pre><code class="language-python">console.print(&quot;[bold green]Claude:[/] Hello, how can I help you?&quot;)
+</code></pre>
+<p>This cleaned up the look of the assistant and made the streaming output more readable.</p>
+<p>More importantly, <code>rich</code> solved a critical problem: we kept hitting <code>BlockingIOError</code> even with chunked output when printing long LLM responses. Offloading to <code>asyncio.to_thread(console.print, ...)</code> was reliable, and <code>rich</code>&#39;s built-in buffering made terminal I/O much smoother and crash-resistant.</p>
+<hr>
+<h2 id="final-result">Final Result</h2>
+<p>The final assistant supports both text and voice input, uses VAD to skip silence, streams LLM responses, and shuts down cleanly. It runs entirely in the terminal and feels remarkably responsive.</p>
+<p>Technologies used:</p>
+<ul>
+<li>Python <code>asyncio</code></li>
+<li>OpenAI Whisper + GPT-4 (via <code>openai-python</code>)</li>
+<li>Silero VAD</li>
+<li><code>sounddevice</code>, <code>wavio</code></li>
+<li><code>rich</code> for terminal output</li>
+<li><code>aioconsole</code> for async user input</li>
+</ul>
+<p>Full code:</p>
+<pre><code class="language-python">import os
+import sys
+import rich 
+from rich.console import Console
+
+import torch
+import asyncio
+import signal
+import numpy as np
+import sounddevice as sd
+import wavio
+from openai import AsyncOpenAI
+from silero_vad import load_silero_vad, read_audio, get_speech_timestamps
+import aioconsole
+
+client = AsyncOpenAI(api_key=os.environ[&#39;OPENAI_API_KEY&#39;])
+console = Console()
+
+SAMPLE_RATE = 16000  # Use 16kHz for Silero VAD
+CHANNELS = 1
+RECORD_SECONDS = 5
+
+audio_queue = asyncio.Queue()  
+
+vad_model =  load_silero_vad()
+
+def is_too_quiet(audio_np, rms_threshold=0.005):
+    rms = np.sqrt(np.mean(audio_np ** 2))
+    return rms &lt; rms_threshold
+
+def is_voice_present(audio_np, sample_rate=16000, frame_size=512, threshold=0.9):
+    # Convert full audio to a tensor
+    audio_tensor = torch.from_numpy(audio_np).float()
+
+    # Break into 512-sample chunks
+    num_frames = len(audio_tensor) // frame_size
+    chunks = audio_tensor[:num_frames * frame_size].reshape(num_frames, frame_size)
+
+    # Run VAD on each chunk and get probs
+    with torch.no_grad():
+        probs = vad_model(chunks, sample_rate)
+
+    # Determine if any frame has speech probability &gt; threshold
+    return (probs &gt; threshold).any().item()
+
+async def audio_stream():
+    loop = asyncio.get_event_loop()
+    while True:
+        audio = await loop.run_in_executor(
+            None,
+            sd.rec,            
+            int(RECORD_SECONDS * SAMPLE_RATE),
+            SAMPLE_RATE,
+            CHANNELS,
+            &#39;int16&#39;
+        )
+        await loop.run_in_executor(None, sd.wait)
+
+        # Check if audio has voice activity
+        audio_np = audio.flatten().astype(np.float32) / 32768.0  # Normalize to [-1, 1]
+        if is_too_quiet(audio_np):
+            continue  # Skip silent recording
+        if is_voice_present(audio_np):
+            # Save and queue file
+            temp_file = &quot;temp_audio.wav&quot;
+            await loop.run_in_executor(None, lambda: wavio.write(temp_file, audio, SAMPLE_RATE, sampwidth=2))
+            await audio_queue.put(temp_file)
+
+async def capture_audio():
+    return await audio_queue.get()  
+
+async def process_voice_input():
+    try:
+        while True:
+            audio_file = await capture_audio()
+            if audio_file is None:
+                break  # Graceful shutdown
+            with open(audio_file, &quot;rb&quot;) as audio:
+                response = await client.audio.transcriptions.create(
+                    model=&quot;whisper-1&quot;,
+                    language=&quot;en&quot;,
+                    file=audio
+                )
+            voice_text = response.text
+            await handle_input(f&quot;{voice_text}&quot;, caller=&quot;voice&quot;)
+    except asyncio.CancelledError:
+        console.print(&quot;[yellow]Voice input task cancelled.[/]&quot;)
+
+async def process_text_input():
+    &quot;&quot;&quot;Process text input from console&quot;&quot;&quot;
+    while True:
+        text = await aioconsole.ainput(&quot;&gt; &quot;)
+        await handle_input(f&quot;{text}&quot;, caller=&quot;text&quot;)
+
+async def llm_call(input_text):
+    response_text = &quot;&quot;
+
+    try:
+        stream = await client.chat.completions.create(
+            model=&quot;gpt-4o-mini&quot;,
+            messages=[
+                {&quot;role&quot;: &quot;system&quot;, &quot;content&quot;: &quot;You are a helpful assistant&quot;},
+                {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: input_text}
+            ],
+            stream=True
+        )
+
+        async for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                response_text += delta
+                await asyncio.to_thread(console.print, delta, end=&quot;&quot;)
+
+    except Exception as e:
+        await asyncio.to_thread(console.print, f&quot;\n[red]Streaming failed:[/] {e}&quot;)
+
+    await asyncio.to_thread(console.print, &quot;&quot;)  
+    return response_text
+
+async def handle_input(input_text, caller):
+    if caller == &quot;voice&quot;:
+        await asyncio.to_thread(console.print, f&quot;{input_text}&quot;)
+    llm_response = await llm_call(input_text)
+    if caller == &quot;voice&quot;:
+        await asyncio.to_thread(console.print, &quot;&gt; &quot;, end=&quot;&quot;)
+
+async def shutdown(loop, signal=None):
+    print(&quot;\nShutting down...&quot;)
+    tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    [task.cancel() for task in tasks]
+    await asyncio.gather(*tasks, return_exceptions=True)
+    loop.stop()
+
+async def main():
+    try:
+        await asyncio.gather(
+            audio_stream(),
+            process_text_input(),
+            process_voice_input()
+        )
+    except asyncio.CancelledError:
+        console.print(&quot;[red]Main loop cancelled by Ctrl+C[/]&quot;)
+
+if __name__ == &quot;__main__&quot;:
+    asyncio.run(main())
+</code></pre>
+<hr>
+<h2 id="whats-next">What&#39;s Next?</h2>
+<p>A few ideas for the future:</p>
+<ul>
+<li>Add TTS (text-to-speech) so the assistant talks back</li>
+<li>Integrate with CLI tools (e.g., &quot;Run <code>git status</code>&quot; by voice)</li>
+<li>Log conversations to a file</li>
+<li>Build a GUI using <code>textual</code></li>
+</ul>
+<p>For now, the REPL assistant lives in my terminal, listening patiently and answering intelligently. And that&#39;s more than I ever expected when I started with a blocking call to <code>sd.rec()</code>.</p>
+
+        </article>
+    </main>
+    <footer>
+        <p>&copy; 2025 My Blog. All rights reserved.</p>
+    </footer>
+</body>
+</html>

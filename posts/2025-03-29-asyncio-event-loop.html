@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resolving RuntimeError: Event Loop is Closed in Python's Asyncio with uvloop - My Blog</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+    <header>
+        <h1>Resolving RuntimeError: Event Loop is Closed in Python's Asyncio with uvloop</h1>
+        <nav>
+            <ul>
+                <li><a href="../index.html">Home</a></li>
+                <li><a href="../about.html">About</a></li>
+                <li><a href="../blog.html">Blog Posts</a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        <article>
+            <p class="date">March 29, 2025</p>
+            <h1 id="resolving-runtimeerror-event-loop-is-closed-in-pythons-asyncio-with-uvloop">Resolving RuntimeError: Event Loop is Closed in Python&#39;s Asyncio with uvloop</h1>
+<p>Python&#39;s asyncio library provides powerful asynchronous programming capabilities but can sometimes produce unexpected errors during program execution. This article examines a common asyncio issue - the &quot;RuntimeError: Event loop is closed&quot; exception - and demonstrates how implementing uvloop resolves this problem efficiently.</p>
+<h2 id="problem-description">Problem Description</h2>
+<p>When building a terminal script using Pydantic AI&#39;s <code>Agent</code> and <code>MCPServerStdio</code> to handle subprocesses asynchronously, the following error occurred after successful program execution:</p>
+<pre><code>Exception ignored in: &lt;coroutine object BaseSubprocessTransport.__del__ at 0x7fc930e5da40&gt;
+Traceback (most recent call last):
+  File &quot;/path/to/python3.10/asyncio/base_subprocess.py&quot;, line 126, in __del__
+    self.close()
+  File &quot;/path/to/python3.10/asyncio/unix_events.py&quot;, line 547, in close
+    self._close(None)
+  File &quot;/path/to/python3.10/asyncio/base_events.py&quot;, line 753, in call_soon
+    self._check_closed()
+  File &quot;/path/to/python3.10/asyncio/base_events.py&quot;, line 515, in _check_closed
+    raise RuntimeError(&#39;Event loop is closed&#39;)
+RuntimeError: Event loop is closed
+</code></pre>
+<p>The initial code implementation was:</p>
+<pre><code class="language-python">import asyncio
+from pydantic_ai import Agent
+from pydantic_ai.mcp import MCPServerStdio
+from pydantic_ai.models.openai import OpenAIModel
+
+async def main():
+    model = OpenAIModel(&quot;gpt-4o-mini&quot;)
+    fs_server = MCPServerStdio(&#39;npx&#39;, [&quot;@modelcontextprotocol/server-filesystem&quot;, os.getcwd()])
+    git_server = MCPServerStdio(&quot;uv&quot;, [&quot;--directory&quot;, os.getcwd(), &quot;run&quot;, &quot;mcp-server-git&quot;])
+    agent = Agent(model, mcp_servers=[fs_server, git_server])
+
+    async with agent.run_mcp_servers():
+        result = await agent.run(&quot;whats the most recent commit in current git repository&quot;)
+        print(result.data)
+
+if __name__ == &quot;__main__&quot;:
+    asyncio.run(main())
+</code></pre>
+<h2 id="root-cause-analysis">Root Cause Analysis</h2>
+<p>This error occurs due to asyncio&#39;s resource management approach. When using <code>asyncio.run()</code>:</p>
+<ol>
+<li>The function creates and manages an event loop</li>
+<li>After the main coroutine completes, the event loop is closed</li>
+<li>Subprocess objects created during execution are left to Python&#39;s garbage collector</li>
+<li>During garbage collection, these objects attempt to schedule callbacks on the now-closed event loop</li>
+<li>This triggers the RuntimeError exception</li>
+</ol>
+<h2 id="solution-implementation-uvloop">Solution Implementation: uvloop</h2>
+<p>The most effective solution is implementing uvloop, a drop-in replacement for asyncio&#39;s event loop that uses the libuv C library (the same engine powering Node.js).</p>
+<p>Adding these two lines resolves the issue:</p>
+<pre><code class="language-python">import uvloop
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+</code></pre>
+<h2 id="why-uvloop-resolves-the-issue">Why uvloop Resolves the Issue</h2>
+<p>uvloop provides several advantages over the standard asyncio implementation:</p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Built-in asyncio</th>
+<th>uvloop</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Implementation</td>
+<td>Pure Python</td>
+<td>Cython + C (libuv)</td>
+</tr>
+<tr>
+<td>Subprocess cleanup</td>
+<td>Deferred to Python GC</td>
+<td>Immediate, proactive</td>
+</tr>
+<tr>
+<td>Resource management</td>
+<td>Less aggressive</td>
+<td>More deterministic</td>
+</tr>
+<tr>
+<td>Performance</td>
+<td>Standard</td>
+<td>Significantly faster</td>
+</tr>
+</tbody></table>
+<p>uvloop proactively manages subprocess resources and handles cleanup more efficiently, preventing the race condition between event loop closure and resource cleanup that causes the error.</p>
+<h2 id="alternative-solutions">Alternative Solutions</h2>
+<p>If uvloop cannot be implemented, these alternative approaches can mitigate the issue:</p>
+<ol>
+<li>Explicitly close and await termination of subprocesses</li>
+<li>Add a small delay at the end of the main coroutine:<pre><code class="language-python">async def main():
+    # existing code
+    await asyncio.sleep(0.1)  # Allow time for cleanup
+</code></pre>
+</li>
+</ol>
+<h2 id="technical-recommendations">Technical Recommendations</h2>
+<p>Based on this analysis:</p>
+<ol>
+<li>Consider uvloop as a standard component for asyncio-based applications</li>
+<li>Implement proper resource management for asyncio subprocesses</li>
+<li>Be aware of the timing between event loop closure and resource cleanup</li>
+<li>Monitor garbage collection behavior in asyncio applications</li>
+</ol>
+<p>These practices will help prevent similar issues in future asyncio implementations and improve overall application stability.</p>
+
+        </article>
+    </main>
+    <footer>
+        <p>&copy; 2025 My Blog. All rights reserved.</p>
+    </footer>
+</body>
+</html>
