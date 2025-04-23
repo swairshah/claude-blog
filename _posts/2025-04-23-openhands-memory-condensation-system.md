@@ -1,6 +1,6 @@
 ---
 layout: post
-title: "OpenHands' Memory and Condensation System for Code Understanding"
+title: OpenHands' Memory and Condensation System for Code Understanding
 date: 2025-04-23
 categories: coding ai
 ---
