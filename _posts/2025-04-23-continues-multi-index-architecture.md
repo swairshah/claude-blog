@@ -1,7 +1,7 @@
 ---
 layout: post
 title: Continue's Multi-Index Architecture for Semantic Code Understanding
-date: 2025-04-23
+date: April 23, 2025
 categories: coding ai
 ---
 
