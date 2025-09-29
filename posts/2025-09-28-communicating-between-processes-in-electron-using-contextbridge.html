@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>"Communicating Between Processes in Electron Using contextBridge" - My Blog</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+    <header>
+        <h1>"Communicating Between Processes in Electron Using contextBridge"</h1>
+        <nav>
+            <ul>
+                <li><a href="../index.html">Home</a></li>
+                <li><a href="../about.html">About</a></li>
+                <li><a href="../blog.html">Blog Posts</a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        <article>
+            <p class="date">2025-09-28</p>
+            <h1 id="communicating-between-processes-in-electron-using-contextbridge">Communicating Between Processes in Electron Using contextBridge</h1>
+<p>Electron is a powerful framework that allows you to build cross-platform desktop applications using web technologies like HTML, CSS, and JavaScript. One key aspect of building Electron apps is enabling communication between the main process and the renderer processes. In this blog post, we&#39;ll explore how to use the <code>contextBridge</code> module to safely expose APIs from the main process to the renderer processes.</p>
+<h2 id="the-need-for-contextbridge">The Need for contextBridge</h2>
+<p>In Electron, the main process is responsible for creating and managing windows, handling system events, and performing privileged operations. On the other hand, renderer processes are responsible for running the web pages and executing JavaScript code within those pages. By default, renderer processes do not have direct access to Node.js APIs or the ability to interact with the operating system.</p>
+<p>To enable communication between the main process and renderer processes, Electron provides the <code>ipcMain</code> and <code>ipcRenderer</code> modules. However, directly exposing <code>ipcRenderer</code> to the renderer processes can be a security risk, as it allows untrusted code executed in the renderer to have access to powerful APIs.</p>
+<p>This is where <code>contextBridge</code> comes into play. It provides a way to safely expose specific APIs from the main process to the renderer processes, without granting full access to <code>ipcRenderer</code> or other sensitive APIs.</p>
+<h2 id="using-contextbridge">Using contextBridge</h2>
+<p>To use <code>contextBridge</code>, you need to follow these steps:</p>
+<ol>
+<li>In the main process, create a <code>preload.js</code> script that defines the APIs you want to expose to the renderer processes.</li>
+<li>Use <code>contextBridge.exposeInMainWorld()</code> to expose the APIs to the renderer processes.</li>
+<li>In the renderer processes, access the exposed APIs via the global <code>window</code> object.</li>
+</ol>
+<p>Here&#39;s an example of how to set up <code>contextBridge</code> in your Electron app:</p>
+<p><strong>main.js</strong></p>
+<pre><code class="language-javascript">const { app, BrowserWindow } = require(&#39;electron&#39;);
+const path = require(&#39;path&#39;);
+
+function createWindow() {
+  const win = new BrowserWindow({
+    width: 800,
+    height: 600,
+    webPreferences: {
+      preload: path.join(__dirname, &#39;preload.js&#39;)
+    }
+  });
+
+  win.loadFile(&#39;index.html&#39;);
+}
+
+app.whenReady().then(() =&gt; {
+  createWindow();
+});
+</code></pre>
+<p><strong>preload.js</strong></p>
+<pre><code class="language-javascript">const { contextBridge, ipcRenderer } = require(&#39;electron&#39;);
+
+contextBridge.exposeInMainWorld(&#39;api&#39;, {
+  send: (channel, data) =&gt; {
+    ipcRenderer.send(channel, data);
+  },
+  receive: (channel, func) =&gt; {
+    ipcRenderer.on(channel, (event, ...args) =&gt; func(...args));
+  }
+});
+</code></pre>
+<p>In this example, we define an <code>api</code> object that exposes two methods: <code>send</code> and <code>receive</code>. These methods wrap the <code>ipcRenderer.send()</code> and <code>ipcRenderer.on()</code> functions, respectively. By exposing these methods through <code>contextBridge</code>, we can safely use them in the renderer processes.</p>
+<p><strong>renderer.js</strong></p>
+<pre><code class="language-javascript">window.api.receive(&#39;response&#39;, (data) =&gt; {
+  console.log(data);
+});
+
+window.api.send(&#39;request&#39;, { message: &#39;Hello from renderer!&#39; });
+</code></pre>
+<p>In the renderer process, we can access the exposed APIs using <code>window.api</code>. We can use <code>window.api.send()</code> to send messages to the main process and <code>window.api.receive()</code> to receive responses.</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>By using <code>contextBridge</code>, you can establish a secure communication channel between the main process and renderer processes in your Electron app. It allows you to expose specific APIs to the renderer processes without compromising security. With <code>contextBridge</code>, you have fine-grained control over what functionality is accessible to the renderer processes, ensuring that untrusted code cannot perform unauthorized actions.</p>
+<p>Remember to carefully design the APIs you expose through <code>contextBridge</code> and validate any data received from the renderer processes to maintain the security of your Electron app.</p>
+<p>Happy coding with Electron and <code>contextBridge</code>!</p>
+
+        </article>
+    </main>
+    <footer>
+        <p>&copy; 2025 My Blog. All rights reserved.</p>
+    </footer>
+</body>
+</html>
