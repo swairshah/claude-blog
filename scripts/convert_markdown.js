@@ -9,7 +9,7 @@ function createHtmlFromMarkdown(title, date, content) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${title} - My Blog</title>
+    <title>${title} - Algorithmic Exchanges</title>
     <link rel="stylesheet" href="../css/style.css">
 </head>
 <body>
@@ -19,7 +19,6 @@ function createHtmlFromMarkdown(title, date, content) {
             <ul>
                 <li><a href="../index.html">Home</a></li>
                 <li><a href="../about.html">About</a></li>
-                <li><a href="../blog.html">Blog Posts</a></li>
             </ul>
         </nav>
     </header>
@@ -30,7 +29,7 @@ function createHtmlFromMarkdown(title, date, content) {
         </article>
     </main>
     <footer>
-        <p>&copy; 2025 My Blog. All rights reserved.</p>
+        <p>&copy; 2025 Algorithmic Exchanges. All rights reserved.</p>
     </footer>
 </body>
 </html>`;
@@ -56,6 +55,11 @@ function processMarkdownFiles() {
     const filePath = path.join(postsDir, file);
     const content = fs.readFileSync(filePath, 'utf8');
     
+    // Skip files marked for deletion
+    if (content.trim() === 'DELETE') {
+      return;
+    }
+    
     // Extract front matter and content
     const frontMatterRegex = /---\n([\s\S]*?)---\n([\s\S]*)/;
     const match = content.match(frontMatterRegex);
@@ -80,12 +84,16 @@ function processMarkdownFiles() {
         const htmlOutput = createHtmlFromMarkdown(title, date, htmlContent);
         fs.writeFileSync(path.join(outputDir, `${slug}.html`), htmlOutput);
         
+        // Get first paragraph for preview (skip headers)
+        const paragraphs = markdownContent.split('\n\n').filter(p => !p.startsWith('#') && p.trim().length > 0);
+        const preview = paragraphs[0] ? paragraphs[0].substring(0, 200) + '...' : 'Read more about this topic...';
+        
         // Add to blog entries
         blogEntries.push({
           title,
           date,
           slug,
-          preview: markdownContent.split('\n').slice(0, 2).join(' ').substring(0, 150) + '...'
+          preview
         });
       }
     }
@@ -94,15 +102,14 @@ function processMarkdownFiles() {
   return blogEntries;
 }
 
-// Update blog index
-function updateBlogIndex(entries) {
-  const blogIndexPath = path.join(__dirname, '../blog.html');
-  let blogIndexContent = fs.readFileSync(blogIndexPath, 'utf8');
+// Update home page (index.html) with all blog posts
+function updateHomePage(entries) {
+  const homePagePath = path.join(__dirname, '../index.html');
   
   // Sort entries by date (newest first)
   entries.sort((a, b) => new Date(b.date) - new Date(a.date));
   
-  // Create HTML for entries
+  // Create HTML for ALL entries
   let entriesHtml = '';
   entries.forEach(entry => {
     entriesHtml += `
@@ -112,54 +119,74 @@ function updateBlogIndex(entries) {
             <p>${entry.preview}</p>
             <a href="posts/${entry.slug}.html">Read more</a>
         </article>
-    `;
+`;
   });
   
-  // Update the main content section
-  const mainContentRegex = /<main>([\s\S]*?)<\/main>/;
-  const updatedContent = blogIndexContent.replace(
-    mainContentRegex, 
-    `<main>
-    ${entriesHtml}
-    </main>`
-  );
+  // Create the full index.html content
+  const indexContent = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Algorithmic Exchanges</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <header>
+        <h1>Algorithmic Exchanges: Claude & Swair Talk Tech</h1>
+        <nav>
+            <ul>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="about.html">About</a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>${entriesHtml}    </main>
+    <footer>
+        <p>&copy; 2025 Algorithmic Exchanges. All rights reserved.</p>
+    </footer>
+</body>
+</html>`;
   
-  fs.writeFileSync(blogIndexPath, updatedContent);
+  fs.writeFileSync(homePagePath, indexContent);
 }
 
-// Update home page with latest posts
-function updateHomePage(entries) {
-  const homePagePath = path.join(__dirname, '../index.html');
-  let homePageContent = fs.readFileSync(homePagePath, 'utf8');
+// Copy static files to _site
+function copyStaticFiles() {
+  const rootDir = path.join(__dirname, '..');
+  const siteDir = path.join(__dirname, '../_site');
   
-  // Sort entries by date (newest first)
-  entries.sort((a, b) => new Date(b.date) - new Date(a.date));
+  // Ensure _site directory exists
+  if (!fs.existsSync(siteDir)) {
+    fs.mkdirSync(siteDir, { recursive: true });
+  }
   
-  // Take only the 3 most recent entries
-  const recentEntries = entries.slice(0, 3);
+  // Copy CSS directory
+  const cssSource = path.join(rootDir, 'css');
+  const cssTarget = path.join(siteDir, 'css');
+  if (fs.existsSync(cssSource)) {
+    if (!fs.existsSync(cssTarget)) {
+      fs.mkdirSync(cssTarget, { recursive: true });
+    }
+    const cssFiles = fs.readdirSync(cssSource);
+    cssFiles.forEach(file => {
+      fs.copyFileSync(path.join(cssSource, file), path.join(cssTarget, file));
+    });
+  }
   
-  // Create HTML for entries
-  let entriesHtml = '';
-  recentEntries.forEach(entry => {
-    entriesHtml += `
-            <article>
-                <h3>${entry.title}</h3>
-                <p>${entry.preview}</p>
-                <a href="posts/${entry.slug}.html">Read more</a>
-            </article>
-    `;
-  });
+  // Copy about.html
+  const aboutSource = path.join(rootDir, 'about.html');
+  const aboutTarget = path.join(siteDir, 'about.html');
+  if (fs.existsSync(aboutSource)) {
+    fs.copyFileSync(aboutSource, aboutTarget);
+  }
   
-  // Update the section content
-  const sectionContentRegex = /<section>\s*<h2>Latest Posts<\/h2>([\s\S]*?)<\/section>/;
-  const updatedContent = homePageContent.replace(
-    sectionContentRegex, 
-    `<section>
-            <h2>Latest Posts</h2>${entriesHtml}
-        </section>`
-  );
-  
-  fs.writeFileSync(homePagePath, updatedContent);
+  // Copy index.html (after it's been updated)
+  const indexSource = path.join(rootDir, 'index.html');
+  const indexTarget = path.join(siteDir, 'index.html');
+  if (fs.existsSync(indexSource)) {
+    fs.copyFileSync(indexSource, indexTarget);
+  }
 }
 
 // Main execution
@@ -168,11 +195,11 @@ function main() {
   const entries = processMarkdownFiles();
   
   if (entries.length > 0) {
-    console.log('Updating blog index...');
-    updateBlogIndex(entries);
-    
-    console.log('Updating home page...');
+    console.log('Updating home page with all posts...');
     updateHomePage(entries);
+    
+    console.log('Copying static files to _site...');
+    copyStaticFiles();
     
     console.log('Done! Processed', entries.length, 'markdown files.');
   } else {
